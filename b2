@@ -1,0 +1,183 @@
+#!/usr/bin/env sh
+
+# Disable: ShellCheck can't follow non-constant source.
+# shellcheck disable=SC1090
+
+set -o errexit
+set -o nounset
+
+if [ "${DEBUG:=""}" != "" ]; then
+  set -o xtrace
+fi
+
+bin="$0"
+if [ -h "$0" ]; then
+  bin="$(readlink "$bin")"
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "$bin")" && pwd -P)"
+DEFAULT_B2_SDK_SHELL="${SCRIPT_DIR}/b2-sdk-shell/*.sh"
+
+: "${B2_SDK_SHELL:="$DEFAULT_B2_SDK_SHELL"}"	
+
+usage() {
+	cmd="$1"
+
+	case "$cmd" in
+		main     ) usage__main;;
+		upload   ) usage__upload;;
+		download ) usage__download;;
+		list     ) usage__list;;
+			*      ) echo "$action: unkown action, see command help";;
+	esac	
+}
+
+usage__main() {
+	cat <<USAGE
+Interact with Backblaze
+
+Usage: $(basename "$0") COMMAND
+
+COMMAND:
+  upload         upload a file from stdin
+  download       download file to stdout
+  list           list file to stdout
+  help [COMMAND] show usage
+
+Environment variables:
+  B2_ID          key ID (required)
+  B2_KEY         application key (required)
+  DEBUG          trace the script execution
+USAGE
+}
+
+usage__upload() {
+	cat <<USAGE
+$(basename "$0") upload FILE_NAME MIME_TYPE
+
+Upload stdin to the file FILE_NAME on the bucket linked
+to the API key
+USAGE
+}
+
+usage__download() {
+	cat <<USAGE
+$(basename "$0") download BUCKET_NAME FILE_NAME
+
+Download the file FILE_NAME from the bucket BUCKET_NAME
+USAGE
+}
+
+usage__list() {
+	cat <<USAGE
+$(basename "$0") list BUCKET_NAME
+
+List files on BUCKET_NAME
+USAGE
+}
+
+upload() {
+	id="$1"
+	key="$2"
+	file="$3"
+  mime="$4"
+
+	# Get the account information
+  authorize_account_payload="$(b2__authorize_account "$id" "$key")"
+  url_api="$(echo "$authorize_account_payload" | b2__authorize_account__api_url)"
+  authorization_token="$(echo "$authorize_account_payload" | b2__authorize_account__authorization_token)"
+	bucket_id="$(echo "$authorize_account_payload" | b2__authorize_account__allowed__bucket_id)"
+
+	# Get the base url
+  url_base="$(b2__url_base "$url_api" "$B2_API_VERSION")"
+
+	# Get the upload url
+  get_upload_url_payload=""
+  get_upload_url_payload="$(b2__get_upload_url "$url_base" "$authorization_token" "$bucket_id")"
+  upload_url="$(echo "$get_upload_url_payload" | b2__get_upload_url__upload_url)"
+  authorization_token="$(echo "$get_upload_url_payload" | b2__get_upload_url__authorization_token)"
+
+	# Read data from stdin
+  data="$(cat /dev/stdin)"
+  sha1="$(echo "$data" | sha1)"
+
+	# Upload the file
+	echo "$data" | b2__upload_file "$upload_url" "$authorization_token" "$file" "$mime" "$sha1"
+}
+
+download() {
+	id="$1"
+	key="$2"
+	bucket_name="$3"
+	file="$4"
+
+	# Get the account information
+  authorize_account_payload="$(b2__authorize_account "$id" "$key")"
+  authorization_token="$(echo "$authorize_account_payload" | b2__authorize_account__authorization_token)"
+	download_url="$(echo "$authorize_account_payload" | b2__authorize_account__download_url)"
+
+	# Download the file
+	b2__download_file_by_name "$download_url" "$bucket_name" "$file" "$authorization_token"
+}
+
+list() {
+	id="$1"
+	key="$2"
+
+	# Get the account information
+  authorize_account_payload="$(b2__authorize_account "$id" "$key")"
+  url_api="$(echo "$authorize_account_payload" | b2__authorize_account__api_url)"
+  authorization_token="$(echo "$authorize_account_payload" | b2__authorize_account__authorization_token)"
+	bucket_id="$(echo "$authorize_account_payload" | b2__authorize_account__allowed__bucket_id)"
+
+	# Get the base url
+  url_base="$(b2__url_base "$url_api" "$B2_API_VERSION")"
+
+	# List
+	list_file_names_payload="$(b2__list_file_names "$url_base" "$bucket_id" "$authorization_token")"
+
+	echo "$list_file_names_payload" | b2__list_file_names__format "fileName"
+}
+
+main() {
+	action="${1:-"help"}"
+
+	case "$action" in
+		help)
+			cmd="${2:-"main"}"
+			usage "$cmd";;
+
+		upload)
+			shift
+			file="${1:?"missing file parameter"}"
+      mime="${2:?"missing mime type"}"
+			upload "$B2_ID" "$B2_KEY" "$file" "$mime";;
+
+		download)
+			shift
+			bucket_name="${1:?"missing bucket name parameter"}"
+			file="${2:?"missing file parameter"}"
+			download "$B2_ID" "$B2_KEY" "$bucket_name" "$file";;
+
+		list)
+			shift
+			bucket_name="${1:?"missing bucket name parameter"}"
+			list "$B2_ID" "$B2_KEY" "$bucket_name";;
+
+			*)
+      echo "$action: unkown action, see command help";;
+	esac	
+}
+
+# if [ ! -f "$B2_SDK_SHELL" ]; then
+#   echo "$B2_SDK_SHELL: B2 sdk shell not found"
+#   usage__main
+#   exit 1
+# fi
+
+# Load the b2 shell library
+for lib in ${B2_SDK_SHELL}; do
+  . "${lib}"
+done
+
+main "$@"

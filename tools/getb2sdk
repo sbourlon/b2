@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o posix
+set -o xtrace
+
+dir="b2-sdk-shell"
+version="$(<B2_SDK_SHELL_VERSION)"
+
+rm -rf "$dir"
+git clone "https://github.com/sbourlon/${dir}.git" "$dir"
+cd "$dir"
+git reset --hard "$version"
+rm -rf .git
